@@ -1,370 +1,79 @@
-local Drawing = {}
+--// from https://devforum.roblox.com/t/cieluv-interpolator/27100
 
-local game = game
-local GetService, FindFirstChild = game.GetService, game.FindFirstChild
-local IsA = game.IsA
-local Vector2new, Instancenew, UDim2new = Vector2.new, Instance.new, UDim2.new
+local CIELUV = {} do
 
-local Workspace = GetService(game, "Workspace");
-local Camera = FindFirstChild(Workspace, "Camera");
-local CoreGui = GetService(game, "CoreGui");
+	-- Combines two colors in CIELUV space.
+	-- function<function<Color3 result>(float t)>(Color3 fromColor, Color3 toColor)
 
-local BaseDrawingProperties = setmetatable({
-    Visible = false,
-    Color = Color3.new(),
-    Transparency = 0,
-    Remove = function()
-    end
-}, {
-    __add = function(tbl1, tbl2)
-        local new = {}
-        for i, v in next, tbl1 do
-            new[i] = v
-        end
-        for i, v in next, tbl2 do
-            new[i] = v
-        end
-        return new
-    end
-})
+	-- https://www.w3.org/Graphics/Color/srgb
+	
+	local clamp = math.clamp
+	local C3 = Color3.new
+	local black = C3(0, 0, 0)
 
-Drawing.new = function(Type, UI)
-    UI = UI and IsA(UI, "ScreenGui") and UI or Instancenew("ScreenGui", CoreGui) or Instancenew("ScreenGui", CoreGui);
+	-- Convert from linear RGB to scaled CIELUV
+	local function RgbToLuv13(c)
+		local r, g, b = c.r, c.g, c.b
+		-- Apply inverse gamma correction
+		r = r < 0.0404482362771076 and r/12.92 or 0.87941546140213*(r + 0.055)^2.4
+		g = g < 0.0404482362771076 and g/12.92 or 0.87941546140213*(g + 0.055)^2.4
+		b = b < 0.0404482362771076 and b/12.92 or 0.87941546140213*(b + 0.055)^2.4
+		-- sRGB->XYZ->CIELUV
+		local y = 0.2125862307855956*r + 0.71517030370341085*g + 0.0722004986433362*b
+		local z = 3.6590806972265883*r + 11.4426895800574232*g + 4.1149915024264843*b
+		local l = y > 0.008856451679035631 and 116*y^(1/3) - 16 or 903.296296296296*y
+		if z > 1e-15 then
+			local x = 0.9257063972951867*r - 0.8333736323779866*g - 0.09209820666085898*b
+			return l, l*x/z, l*(9*y/z - 0.46832)
+		else
+			return l, -0.19783*l, -0.46832*l
+		end
+	end
 
-    if (Type == "Line") then
-        local LineProperties = ({
-            To = Vector2new(),
-            From = Vector2new(),
-            Thickness = 1,
-        } + BaseDrawingProperties)
+	function CIELUV:Lerp(c0, c1)
+		local l0, u0, v0 = RgbToLuv13(c0)
+		local l1, u1, v1 = RgbToLuv13(c1)
 
-        local LineFrame = Instancenew("Frame");
-        LineFrame.AnchorPoint = Vector2new(0.5, 0.5);
-        LineFrame.BorderSizePixel = 0
+		-- The inputs aren't needed anymore, so don't drag out their lifetimes
+		c0, c1 = nil, nil
 
-        LineFrame.BackgroundColor3 = LineProperties.Color
-        LineFrame.Visible = LineProperties.Visible
-        LineFrame.BackgroundTransparency = LineProperties.Transparency
+		return function(t)
+			-- Interpolate
+			local l = (1 - t)*l0 + t*l1
+			if l < 0.0197955 then
+				return black
+			end
+			local u = ((1 - t)*u0 + t*u1)/l + 0.19783
+			local v = ((1 - t)*v0 + t*v1)/l + 0.46832
 
+			-- CIELUV->XYZ
+			local y = (l + 16)/116
+			y = y > 0.206896551724137931 and y*y*y or 0.12841854934601665*y - 0.01771290335807126
+			local x = y*u/v
+			local z = y*((3 - 0.75*u)/v - 5)
 
-        LineFrame.Parent = UI
+			-- XYZ->linear sRGB
+			local r =  7.2914074*x - 1.5372080*y - 0.4986286*z
+			local g = -2.1800940*x + 1.8757561*y + 0.0415175*z
+			local b =  0.1253477*x - 0.2040211*y + 1.0569959*z
 
-        return setmetatable({}, {
-            __newindex = (function(self, Property, Value)
-                if (Property == "To") then
-                    local To = Value
-                    local Direction = (To - LineProperties.From);
-                    local Center = (To + LineProperties.From) / 2
-                    local Distance = Direction.Magnitude
-                    local Theta = math.atan2(Direction.Y, Direction.X);
+			-- Adjust for the lowest out-of-bounds component
+			if r < 0 and r < g and r < b then
+				r, g, b = 0, g - r, b - r
+			elseif g < 0 and g < b then
+				r, g, b = r - g, 0, b - g
+			elseif b < 0 then
+				r, g, b = r - b, g - b, 0
+			end
 
-                    LineFrame.Position = UDim2.fromOffset(Center.X, Center.Y);
-                    LineFrame.Rotation = math.deg(Theta);
-                    LineFrame.Size = UDim2.fromOffset(Distance, LineProperties.Thickness);
-
-                    LineProperties.To = To
-                end
-                if (Property == "From") then
-                    local From = Value
-                    local Direction = (LineProperties.To - From);
-                    local Center = (LineProperties.To + From) / 2
-                    local Distance = Direction.Magnitude
-                    local Theta = math.atan2(Direction.Y, Direction.X);
-
-                    LineFrame.Position = UDim2.fromOffset(Center.X, Center.Y);
-                    LineFrame.Rotation = math.deg(Theta);
-                    LineFrame.Size = UDim2.fromOffset(Distance, LineProperties.Thickness);
-
-
-                    LineProperties.From = From
-                end
-                if (Property == "Visible") then
-                    LineFrame.Visible = Value
-                    LineProperties.Visible = Value
-                end
-                if (Property == "Thickness") then
-                    Value = Value < 1 and 1 or Value
-
-                    local Direction = (LineProperties.To - LineProperties.From);
-                    local Distance = Direction.Magnitude
-
-                    LineFrame.Size = UDim2.fromOffset(Distance, Value);
-
-                    LineProperties.Thickness = Value
-                end
-                if (Property == "Transparency") then
-                    LineFrame.BackgroundTransparency = 1 - Value
-                    LineProperties.Transparency = Value
-                end
-                if (Property == "Color") then
-                    LineFrame.BackgroundColor3 = Value
-                    LineProperties.Color = Value 
-                end
-            end),
-            __index = (function(self, Property)
-                if (Property == "Remove") then
-                    return (function()
-                        LineFrame:Destroy();
-                    end)
-                end
-                return LineProperties[Property]
-            end)
-        })
-    end
-
-    if (Type == "Circle") then
-        local CircleProperties = ({
-            Radius = 150,
-            Filled = false,
-            Position = Vector2new()
-        } + BaseDrawingProperties)
-
-        local CircleFrame = Instancenew("Frame");
-
-        CircleFrame.AnchorPoint = Vector2new(0.5, 0.5);
-        CircleFrame.BorderSizePixel = 0
-
-        CircleFrame.BackgroundColor3 = CircleProperties.Color
-        CircleFrame.Visible = CircleProperties.Visible
-        CircleFrame.BackgroundTransparency = CircleProperties.Transparency
-
-        local Corner = Instancenew("UICorner", CircleFrame);
-        Corner.CornerRadius = UDim.new(1, 0);
-        CircleFrame.Size = UDim2new(0, CircleProperties.Radius, 0, CircleProperties.Radius);
-
-        CircleFrame.Parent = UI
-
-        return setmetatable({}, {
-            __newindex = (function(self, Property, Value)
-                if (Property == "Radius") then
-                    CircleFrame.Size = UDim2new(0, Value, 0, Value);
-                    CircleProperties.Radius = Value
-                end
-                if (Property == "Position") then
-                    CircleFrame.Position = UDim2new(0, Value.X, 0, Value.Y);
-                    CircleProperties.Position = Value
-                end
-                if (Property == "Filled") then
-                    CircleFrame.BackgroundTransparency = Value == true and 0 or 0.8
-                    CircleProperties.Filled = Value
-                end
-                if (Property == "Color") then
-                    CircleFrame.BackgroundColor3 = Value
-                    CircleProperties.Color = Value
-                end
-                if (Property == "Visible") then
-                    CircleFrame.Visible = Value
-                    CircleProperties.Visible = Value
-                end
-                if (Property == "Transparency") then
-
-                end
-            end),
-            __index = (function(self, Property)
-                if (Property == "Remove") then
-                    return (function()
-                        CircleFrame:Destroy();
-                    end)
-                end
-                
-                return CircleProperties[Property]
-            end)
-        })
-    end
-
-    if (Type == "Text") then
-        local TextProperties = ({
-            Text = "",
-            Size = 0,
-            Center = false,
-            Outline = false,
-            OutlineColor = Color3.new(),
-            Position = Vector2new(),
-        } + BaseDrawingProperties)
-
-        local TextLabel = Instancenew("TextLabel");
-
-        TextLabel.AnchorPoint = Vector2new(0.5, 0.5);
-        TextLabel.BorderSizePixel = 0
-        TextLabel.Size = UDim2new(0, 200, 0, 50);
-        TextLabel.Font = Enum.Font.SourceSans
-        TextLabel.TextSize = 14
-
-        TextLabel.TextColor3 = TextProperties.Color
-        TextLabel.Visible = TextProperties.Visible
-        TextLabel.BackgroundTransparency = 1
-        TextLabel.TextTransparency = 1 - TextProperties.Transparency
-        
-        TextLabel.Parent = UI
-
-        return setmetatable({}, {
-            __newindex = (function(self, Property, Value)
-                if (Property == "Text") then
-                    TextLabel.Text = Value
-                    TextProperties.Text = Value
-                end
-                if (Property == "Position") then
-                    TextLabel.Position = UDim2new(0, Value.X, 0, Value.Y);
-                    TextProperties.Position = Value
-                end
-                if (Property == "Size") then
-                    TextLabel.TextSize = Value
-                    TextProperties.Size = Value
-                end
-                if (Property == "Color") then
-                    TextLabel.TextColor3 = Value
-                    TextProperties.Color = Value
-                end
-                if (Property == "Transparency") then
-                    TextLabel.TextTransparency = 1 - Value
-                    TextProperties.Transparency = Value
-                end
-                if (Property == "Visible") then
-                    TextLabel.Visible = Value
-                    TextProperties.Visible = Value
-                end
-                if (Property == "Center") then
-                    TextLabel.Position = Value == true and UDim2new(0, Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2, 0)
-                    TextProperties.Center = Value
-                end
-            end),
-            __index = (function(self, Property)
-                if (Property == "Remove") then
-                    return (function()
-                        TextLabel:Destroy();
-                    end)
-                end
-                
-                return TextProperties[Property]
-            end)
-        })
-    end
-
-    if (Type == "Square") then
-        local SquareProperties = ({
-            Thickness = 1,
-            Size = Vector2new(),
-            Position = Vector2new(),
-            Filled = false,
-        } + BaseDrawingProperties);
-
-        local SquareFrame = Instancenew("Frame");
-        
-        SquareFrame.AnchorPoint = Vector2new(0.5, 0.5);
-        SquareFrame.BorderSizePixel = 0
-
-        SquareFrame.Visible = false
-        SquareFrame.Parent = UI
-
-        return setmetatable({}, {
-            __newindex = (function(self, Property, Value)
-                if (Property == "Size") then
-                    SquareFrame.Size = UDim2new(0, Value.X, 0, Value.Y);
-                    SquareProperties.Text = Value
-                end
-                if (Property == "Position") then
-                    SquareFrame.Position = UDim2new(0, Value.X, 0, Value.Y);
-                    SquareProperties.Position = Value
-                end
-                if (Property == "Size") then
-                    SquareFrame.Size = UDim2new(0, Value.X, 0, Value.Y);
-                    SquareProperties.Size = Value
-                end
-                if (Property == "Color") then
-                    SquareFrame.TextColor3 = Value
-                    SquareProperties.Color = Value
-                end
-                if (Property == "Transparency") then
-                    SquareFrame.BackgroundTransparency = 1 - Value
-                    SquareProperties.Transparency = Value
-                end
-                if (Property == "Visible") then
-                    SquareFrame.Visible = Value
-                    SquareProperties.Visible = Value
-                end
-                if (Property == "Filed") then -- requires beta
-
-                end
-            end),
-            __index = (function(self, Property)
-                if (Property == "Remove") then
-                    return (function()
-                        SquareFrame:Destroy();
-                    end)
-                end
-                
-                return SquareProperties[Property]
-            end)
-        })
-    end
-
-    if (Type == "Image") then
-        local ImageProperties = ({
-            Data = "rbxassetid://848623155", -- roblox assets only rn
-            Size = Vector2new(),
-            Position = Vector2new(),
-            Rounding = 0,
-        });
-
-        local ImageLabel = Instancenew("ImageLabel");
-
-        ImageLabel.AnchorPoint = Vector2new(0.5, 0.5);
-        ImageLabel.BorderSizePixel = 0
-        ImageLabel.ScaleType = Enum.ScaleType.Stretch
-        ImageLabel.Transparency = 1
-        
-        ImageLabel.Visible = false
-        ImageLabel.Parent = UI
-
-        return setmetatable({}, {
-            __newindex = (function(self, Property, Value)
-                if (Property == "Size") then
-                    ImageLabel.Size = UDim2new(0, Value.X, 0, Value.Y);
-                    ImageProperties.Text = Value
-                end
-                if (Property == "Position") then
-                    ImageLabel.Position = UDim2new(0, Value.X, 0, Value.Y);
-                    ImageProperties.Position = Value
-                end
-                if (Property == "Size") then
-                    ImageLabel.Size = UDim2new(0, Value.X, 0, Value.Y);
-                    ImageProperties.Size = Value
-                end
-                if (Property == "Transparency") then
-                    ImageLabel.ImageTransparency = 1 - Value
-                    ImageProperties.Transparency = Value
-                end
-                if (Property == "Visible") then
-                    ImageLabel.Visible = Value
-                    ImageProperties.Visible = Value
-                end
-                if (Property == "Color") then
-                    ImageLabel.ImageColor3 = Value
-                    ImageLabel.Color = Value
-                end
-                if (Property == "Data") then
-                    ImageLabel.Image = Value
-                    ImageProperties.Data = Value
-                end
-            end),
-            __index = (function(self, Property)
-                if (Property == "Remove") then
-                    return (function()
-                        ImageLabel:Destroy();
-                    end)
-                end
-                
-                return ImageLabel[Property]
-            end)
-        })
-    end
-
-
-    if (Type == "Quad") then -- will add later
-        return setmetatable({}, {
-            
-        });
-    end
+			return C3(
+				-- Apply gamma correction and clamp the result
+				clamp(r < 3.1306684425e-3 and 12.92*r or 1.055*r^(1/2.4) - 0.055, 0, 1),
+				clamp(g < 3.1306684425e-3 and 12.92*g or 1.055*g^(1/2.4) - 0.055, 0, 1),
+				clamp(b < 3.1306684425e-3 and 12.92*b or 1.055*b^(1/2.4) - 0.055, 0, 1)
+			)
+		end
+	end
 end
 
-return Drawing
+return CIELUV
